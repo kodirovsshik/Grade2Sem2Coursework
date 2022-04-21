@@ -127,34 +127,47 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 		return true;
 	};
 
-	auto pick_pivoting_column = [&]() -> size_t
+	auto pick_pivoting_column = [&](size_t start) -> size_t
 	{
-		size_t pivot_column = 0;
+		if (start == total_vars_count)
+			return -1;
+
+		size_t pivot_column = start;
 		auto& objective_row = tableau[height - 1];
-		for (size_t i = 1; i < total_vars_count; ++i)
+		for (size_t i = start + 1; i < total_vars_count; ++i)
 		{
 			if (i == objective_column)
 				continue;
 			if (objective_row[i] > objective_row[pivot_column])
 				pivot_column = i;
 		}
-		return pivot_column;
+		return objective_row[pivot_column] >= 0 ? pivot_column : -1;
 	};
 
 	auto solve_current_objective = [&]
 	{
 		auto& vars = row_associated_vars;
 		size_t iters = total_vars_count * total_vars_count;
+		size_t starting_column = 0;
 		while (iters-- > 0)
 		{
 			auto& objective_row = tableau[height - 1];
-			size_t pivot_column = pick_pivoting_column();
+			size_t pivot_column = pick_pivoting_column(starting_column);
+
+			if (pivot_column == -1)
+				break;
 
 			if (objective_row[pivot_column] <= error_tolerance)
 				break;
 
 			if (!try_rowwise_transformation(pivot_column))
-				break;
+			{
+				++iters;
+				starting_column = pivot_column + 1;
+				continue;
+			}
+
+			starting_column = 0;
 		}
 	};
 
@@ -208,7 +221,7 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 
 	--height;
 	width -= n_artificial_vars + 1;
-	total_vars_count = n_vars + n_equational_vars;
+	total_vars_count = n_vars + 1 + n_equational_vars;
 	objective_column = n_vars;
 
 	tableau.pop_back();
@@ -240,12 +253,24 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 
 	for (const auto& constraint : constraints)
 	{
-		const double a = evaluate(constraint.weights, result);
-		const double b = constraint.limit;
-		const double max_err = fabs(a + b) / 2 * error_tolerance;
-		const double diff = a - b;
-		if (diff > max_err)
-			return {};
+		if (constraint.direction == 0)
+		{
+			const double a = evaluate(constraint.weights, result);
+			const double b = constraint.limit;
+			const double max_err = fabs(a + b) / 2 * error_tolerance;
+			if (fabs(a - b) > max_err)
+				return {};
+		}
+		else
+		{
+			const double a = evaluate(constraint.weights, result);
+			const double b = constraint.limit;
+			const double max_err = fabs(a + b) / 2 * error_tolerance;
+			const double diff = a - b;
+			const double k = constraint.direction;
+			if (diff * k > max_err)
+				return {};
+		}
 	}
 
 	result.push_back(tableau[height - 1][width - 1]);
@@ -257,7 +282,11 @@ values_t maximizing_simplex_method(const std::vector<constraint_t>& constraints,
 	for (auto& x : objective)
 		x = -x;
 
-	return minimizing_simplex_method(constraints, objective);
+	auto result = minimizing_simplex_method(constraints, objective);
+	if (result.size())
+		result.back() *= -1;
+
+	return result;
 }
 //values_t minimizing_integer_simplex_method(const std::vector<constraint_t>& constraints, const weights_t& objective)
 //{
@@ -270,12 +299,11 @@ values_t maximizing_simplex_method(const std::vector<constraint_t>& constraints,
 int main()
 {
 	const std::vector<constraint_t> constraints = {
-		{{1, 0}, 3, 1},
-		{{-1, 1}, 1, 1},
-		{{1, 0}, 1, -1},
+		{{1, 1}, 2, 0},
+		{{1, -1}, 1, 0},
 	};
 
-	const weights_t objective{-2, 1};
+	const weights_t objective{0, 0};
 
 	auto solution = maximizing_simplex_method(constraints, objective);
 	
