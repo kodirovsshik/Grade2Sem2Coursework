@@ -2,6 +2,8 @@
 #include <vector>
 #include <iostream>
 #include <unordered_set>
+#include <algorithm>
+#include <ranges>
 
 #include <cassert>
 
@@ -12,11 +14,17 @@ using upper_limit_t = double;
 struct constraint_t
 {
 	weights_t weights;
-	upper_limit_t limit;
+	upper_limit_t limit = NAN;
 	int direction = 1;
 };
+using constraints_t = std::vector<constraint_t>;
 
 using values_t = std::vector<double>;
+void free(values_t& x)
+{
+	values_t empty;
+	x.swap(empty);
+}
 
 
 double evaluate(const weights_t& coeffs, const values_t& values)
@@ -29,7 +37,17 @@ double evaluate(const weights_t& coeffs, const values_t& values)
 	return sum;
 }
 
-values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints, const weights_t& objective)
+
+static constexpr double error_tolerance = 1e-4;
+double get_error_tolerance(double around)
+{
+	around = fabs(around);
+	if (around < error_tolerance)
+		return error_tolerance;
+	return error_tolerance * around;
+}
+
+values_t minimizing_simplex_method(const constraints_t& constraints, const weights_t& objective)
 {
 	//vars:
 	//[0; N-1] = vars
@@ -44,8 +62,6 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 
 	//where obj2 is an artificial objective for the purpose of canonnicalizing
 
-
-	static constexpr double error_tolerance = 1e-8;
 
 	using row_t = std::vector<double>;
 	using matrix_t = std::vector<row_t>;
@@ -129,7 +145,7 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 
 	auto pick_pivoting_column = [&](size_t start) -> size_t
 	{
-		if (start == total_vars_count)
+		if (start >= total_vars_count - 1)
 			return -1;
 
 		size_t pivot_column = start;
@@ -173,8 +189,6 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 
 
 
-	//Phase 1: cannonicalizing
-
 	//Constraints data
 	for (size_t i = 0; i < n_constraints; ++i)
 	{
@@ -206,18 +220,29 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 		tableau[height - 1][n_vars + 1 + n_equational_vars + 1 + j] = -1;
 	tableau[height - 1][n_vars + 1 + n_equational_vars] = 1;
 
+	auto artificial_objective = [&]
+	{
+		return fabs(tableau[height - 1][width - 1]);
+	};
 
 
 	for (size_t i = 0; i < n_constraints; ++i)
 		add_row(height - 1, i, 1);
 
 
+	{ int _ = 0; }
 
 	//Phase 1: cannonicalizing
-	solve_current_objective();
+	for (size_t i = 0; i < n_vars + 1 + n_equational_vars; ++i)
+		try_rowwise_transformation(i);
 
-	if (fabs(tableau[height - 1][width - 1]) > error_tolerance)
-		return {};
+	if (artificial_objective() > error_tolerance)
+	{
+		solve_current_objective();
+		if (artificial_objective() > error_tolerance)
+			return {};
+	}
+
 
 	--height;
 	width -= n_artificial_vars + 1;
@@ -277,7 +302,7 @@ values_t minimizing_simplex_method(const std::vector<constraint_t>& constraints,
 	return result;
 }
 
-values_t maximizing_simplex_method(const std::vector<constraint_t>& constraints, weights_t objective)
+values_t maximizing_simplex_method(const constraints_t& constraints, weights_t objective)
 {
 	for (auto& x : objective)
 		x = -x;
@@ -288,25 +313,121 @@ values_t maximizing_simplex_method(const std::vector<constraint_t>& constraints,
 
 	return result;
 }
-//values_t minimizing_integer_simplex_method(const std::vector<constraint_t>& constraints, const weights_t& objective)
-//{
-	//return {};
-//}
 
+values_t minimizing_integer_simplex_method(constraints_t& constraints, const weights_t& objective)
+{
+	auto solution = minimizing_simplex_method(constraints, objective);
+	if (solution.empty())
+		return {};
+
+	const double optimal_value = solution.back();
+	solution.pop_back();
+
+	auto integer_divergence = []
+	(double x) -> double
+	{
+		return fabs(x - round(x));
+	};
+
+	const size_t most_divergent_index = std::ranges::max_element(solution, {}, integer_divergence) - solution.begin();
+	const double most_divergent = solution[most_divergent_index];
+
+	if (integer_divergence(most_divergent) < get_error_tolerance(most_divergent))
+	{
+		solution.push_back(optimal_value);
+		return solution;
+	}
+
+	free(solution);
+
+	constraint_t new_constraint;
+	new_constraint.weights.resize(objective.size());
+
+	//x[i] <= floor(X[i]);
+	new_constraint.weights[most_divergent_index] = 1;
+	new_constraint.direction = 1;
+	new_constraint.limit = floor(most_divergent);
+
+	constraints.push_back(std::move(new_constraint));
+	auto solution_left = minimizing_integer_simplex_method(constraints, objective);
+	
+
+	new_constraint = std::move(constraints.back());
+	new_constraint.direction = -1;
+	new_constraint.limit += 1;
+	constraints.back() = std::move(new_constraint);
+
+	auto solution_right = minimizing_integer_simplex_method(constraints, objective);
+
+	constraints.pop_back();
+
+	if (solution_left.empty())
+		return solution_right;
+	if (solution_right.empty())
+		return solution_left;
+
+	if (solution_right.back() < solution_left.back())
+		return solution_right;
+	else
+		return solution_left;
+}
+values_t minimizing_integer_simplex_method(const constraints_t& constraints, const weights_t& objective)
+{
+	constraints_t copy = constraints;
+	return minimizing_integer_simplex_method(copy, objective);
+}
 
 
 
 int main()
 {
-	const std::vector<constraint_t> constraints = {
-		{{1, 1}, 2, 0},
-		{{1, -1}, 1, 0},
+	std::vector<constraint_t> constraints;
+
+	const double price_new = 400;
+	const double price_old = 800;
+
+	const double hours_new = 50;
+	const double hours_old = 100;
+
+	const double gamma = 0.9;
+	
+	const double initial_workers = 60;
+
+	auto gamma_sum = [&gamma]
+	(size_t n) -> double
+	{
+		if (gamma == 1)
+			return (double)n;
+		else
+			return (1 - pow(gamma, n + 1)) / (1 - gamma);
 	};
 
-	const weights_t objective{0, 0};
+	const double min_hours[6] = { 6500, 6600, 6600, 6500, 6400, 6400 };
 
-	auto solution = maximizing_simplex_method(constraints, objective);
-	
+	for (size_t i = 1; i <= 6; ++i)
+	{
+		constraint_t c;
+		c.direction = -1;
+		c.limit = min_hours[i - 1] - initial_workers * pow(gamma, i - 1) * hours_old;
+
+		c.weights.resize(6, 0);
+		for (size_t j = 1; j <= i - 1; ++j)
+			c.weights[j - 1] = pow(gamma, i - 1 - j) * hours_old;
+		c.weights[i - 1] = hours_new;
+
+		constraints.push_back(std::move(c));
+	}
+
+
+
+	weights_t objective(6, 0);
+
+	for (size_t i = 1; i <= 6; ++i)
+	{
+		objective[i - 1] = price_new + price_old * gamma_sum(5 - i);
+	}
+
+	auto solution = minimizing_integer_simplex_method(constraints, objective);
 
 	return 0;
 }
