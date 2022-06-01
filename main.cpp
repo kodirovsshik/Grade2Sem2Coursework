@@ -1,11 +1,15 @@
-
+﻿
 #include <vector>
 #include <iostream>
 #include <unordered_set>
 #include <algorithm>
 #include <ranges>
+#include <source_location>
 
-#include <cassert>
+#include <clocale>
+
+#include <conio.h>
+
 
 
 using weights_t = std::vector<double>;
@@ -20,6 +24,23 @@ struct constraint_t
 using constraints_t = std::vector<constraint_t>;
 
 using values_t = std::vector<double>;
+
+
+
+#define xassert(cond) _xassert((cond), #cond)
+void _xassert(bool ok, const char* cond, std::source_location pos = std::source_location::current())
+{
+	if (!ok)
+	{
+		std::cerr << "\aFrom " << pos.file_name() << ':' << pos.line() << ":\n";
+		std::cerr << " In function " << pos.function_name() << ": ASSERTION FAILED:\n";
+		std::cerr << "  " << cond << std::endl;
+		system("pause");
+	}
+}
+
+
+
 void free(values_t& x)
 {
 	values_t empty;
@@ -29,7 +50,7 @@ void free(values_t& x)
 
 double evaluate(const weights_t& coeffs, const values_t& values)
 {
-	assert(coeffs.size() == values.size());
+	xassert(coeffs.size() == values.size());
 
 	double sum = 0;
 	for (size_t i = 0; i < coeffs.size(); ++i)
@@ -72,7 +93,7 @@ values_t minimizing_simplex_method(const constraints_t& constraints, const weigh
 	size_t n_artificial_vars = n_constraints;
 
 	for (const auto& constraint : constraints)
-		assert(constraint.weights.size() == n_vars);
+		xassert(constraint.weights.size() == n_vars);
 
 	size_t total_vars_count = n_vars + n_equational_vars + 1 + n_artificial_vars;
 	size_t width = total_vars_count + 2;
@@ -378,23 +399,23 @@ values_t minimizing_integer_simplex_method(const constraints_t& constraints, con
 }
 
 
-
-int main()
+struct task_t
 {
-	std::vector<constraint_t> constraints;
+	double price_new = 400;
+	double price_old = 800;
 
-	const double price_new = 400;
-	const double price_old = 800;
+	double hours_new = 50;
+	double hours_old = 100;
 
-	const double hours_new = 50;
-	const double hours_old = 100;
+	double gamma = 0.9;
 
-	const double gamma = 0.9;
-	
-	const double initial_workers = 60;
+	double initial_workers = 60;
 
-	auto gamma_sum = [&gamma]
-	(size_t n) -> double
+	double min_hours[6] = { 6500, 6600, 6600, 6500, 6400, 6400 };
+
+
+
+	double gamma_sum(size_t n)
 	{
 		if (gamma == 1)
 			return (double)n;
@@ -402,32 +423,156 @@ int main()
 			return (1 - pow(gamma, n + 1)) / (1 - gamma);
 	};
 
-	const double min_hours[6] = { 6500, 6600, 6600, 6500, 6400, 6400 };
-
-	for (size_t i = 1; i <= 6; ++i)
+	void solve()
 	{
-		constraint_t c;
-		c.direction = -1;
-		c.limit = min_hours[i - 1] - initial_workers * pow(gamma, i - 1) * hours_old;
+		std::vector<constraint_t> constraints;
 
-		c.weights.resize(6, 0);
-		for (size_t j = 1; j <= i - 1; ++j)
-			c.weights[j - 1] = pow(gamma, i - 1 - j) * hours_old;
-		c.weights[i - 1] = hours_new;
+		for (size_t i = 1; i <= 6; ++i)
+		{
+			constraint_t c;
+			c.direction = -1;
+			c.limit = min_hours[i - 1] - initial_workers * pow(gamma, i - 1) * hours_old;
 
-		constraints.push_back(std::move(c));
+			c.weights.resize(6, 0);
+			for (size_t j = 1; j <= i - 1; ++j)
+				c.weights[j - 1] = pow(gamma, i - 1 - j) * hours_old;
+			c.weights[i - 1] = hours_new;
+
+			constraints.push_back(std::move(c));
+		}
+
+
+
+		weights_t objective(6, 0);
+
+		for (size_t i = 1; i <= 6; ++i)
+		{
+			objective[i - 1] = price_new + price_old * gamma_sum(5 - i);
+		}
+
+		auto solution = minimizing_integer_simplex_method(constraints, objective);
+		if (solution.size())
+			solution.back() += initial_workers * price_old * gamma_sum(5);
+
+		return solution;
 	}
+};
 
+task_t task{};
 
-
-	weights_t objective(6, 0);
-
-	for (size_t i = 1; i <= 6; ++i)
+void editor()
+{
+	while (true)
 	{
-		objective[i - 1] = price_new + price_old * gamma_sum(5 - i);
-	}
+		std::wcout << L"\n Текущие данные:\n";
 
-	auto solution = minimizing_integer_simplex_method(constraints, objective);
+		std::wcout << L" [1] З/П стажёра: " << task.price_new << '\n';
+		std::wcout << L" [2] З/П работника: " << task.price_old << '\n';
+		std::wcout << L" [3] Кол-во часов стажёра в месяц: " << task.hours_new << '\n';
+		std::wcout << L" [4] Кол-во часов работника в месяц: " << task.hours_old << '\n';
+		std::wcout << L" [5] Максимальный процент увольняемости: " << 100 * (1 - task.gamma) << '\n';
+		std::wcout << L" [6] Изначальное количество работников: " << task.min_hours << '\n';
+		std::wcout << L" [7] Необходимое число рабочих часов в месяц:\n  ";
+
+		for (auto h : task.min_hours)
+			std::wcout << h << ' ';
+
+		std::wcout << "\n\n";
+		std::wcout << L" Нажмите на номер переменной или массива для изменения значения\n";
+		std::wcout << L" Нажмите на 0 чтобы вернуться в меню\n";
+		std::wcout << L" Нажмите на Delete чтобы восстановить исходные значения\n";
+		std::wcout << L"\n >>> ";
+
+		char c = _getch();
+		if (c == -1)
+			task = task_t();
+		else if (c == '0')
+			return;
+		else
+		{
+			if (c < '1' || c > '7')
+				continue;
+
+			std::wcout << c << "\n\n";
+			c -= '0';
+		
+			double* p_var = nullptr;
+			double dummy = 0;
+			if (c == 7)
+			{
+				int x = 0;
+				while (x < 1 || x > 7)
+				{
+					std::wcout << " Введите номер месяца (1 - Январь, 6 - Июнь)\n";
+					std::wcout << L" >>> ";
+					std::cin >> x;
+				}
+				p_var = &task.min_hours[x - 1];
+			}
+			else if (c == 5)
+			{
+
+			}
+		}
+	}
+}
+
+void about()
+{
+	std::wcout << L"\n\
+ Данная программа была разработана студентом группы А01ИСТ2 МГЭИ А. Д. Сахарова \
+ БГУ Егоровым Станиславом в рамках курсовой работы по дисциплине \"Исследование \n\
+ операций\"\n\n\
+ Вариант: 18\n\
+ Тема: \"Задача линейного программирования\"\n\n\
+ Нажмите любую клавишу для продолжения";
+	(void)_getch();
+}
+
+void menu()
+{
+	static const wchar_t menu_data[] = 
+LR"(
+ Меню:
+ 1 - Решить задачу
+ 2 - Напечатать/редактировать входные данные
+ 3 - Об авторе
+ 4 - Выход
+ >>> )";
+	while (true)
+	{
+		system("cls");
+		std::wcout << menu_data;
+
+		int choice;
+		std::cin >> choice;
+		
+		system("cls");
+		switch (choice)
+		{
+		case 1:
+			task.solve();
+			break;
+
+		case 2:
+			//editor();
+			break;
+
+		case 3:
+			about();
+			break;
+
+		case 4:
+			return;
+		}
+ 	}
+}
+
+int main()
+{
+	xassert(setlocale(LC_ALL, ".65001"));
+
+	menu();
 
 	return 0;
 }
